@@ -438,7 +438,7 @@ public partial class SettingModelFactory : ISettingModelFactory
             LogoPictureId = storeInformationSettings.LogoPictureId,
             DisplayEuCookieLawWarning = storeInformationSettings.DisplayEuCookieLawWarning,
             FacebookLink = storeInformationSettings.FacebookLink,
-            TwitterLink = storeInformationSettings.TwitterLink,
+            XLink = storeInformationSettings.XLink,
             YoutubeLink = storeInformationSettings.YoutubeLink,
             InstagramLink = storeInformationSettings.InstagramLink,
             SubjectFieldOnContactUsForm = commonSettings.SubjectFieldOnContactUsForm,
@@ -459,7 +459,7 @@ public partial class SettingModelFactory : ISettingModelFactory
         model.LogoPictureId_OverrideForStore = await _settingService.SettingExistsAsync(storeInformationSettings, x => x.LogoPictureId, storeId);
         model.DisplayEuCookieLawWarning_OverrideForStore = await _settingService.SettingExistsAsync(storeInformationSettings, x => x.DisplayEuCookieLawWarning, storeId);
         model.FacebookLink_OverrideForStore = await _settingService.SettingExistsAsync(storeInformationSettings, x => x.FacebookLink, storeId);
-        model.TwitterLink_OverrideForStore = await _settingService.SettingExistsAsync(storeInformationSettings, x => x.TwitterLink, storeId);
+        model.XLink_OverrideForStore = await _settingService.SettingExistsAsync(storeInformationSettings, x => x.XLink, storeId);
         model.YoutubeLink_OverrideForStore = await _settingService.SettingExistsAsync(storeInformationSettings, x => x.YoutubeLink, storeId);
         model.InstagramLink_OverrideForStore = await _settingService.SettingExistsAsync(storeInformationSettings, x => x.InstagramLink, storeId);
         model.SubjectFieldOnContactUsForm_OverrideForStore = await _settingService.SettingExistsAsync(commonSettings, x => x.SubjectFieldOnContactUsForm, storeId);
@@ -1040,6 +1040,8 @@ public partial class SettingModelFactory : ISettingModelFactory
             model.DisplayShipmentEventsToStoreOwner_OverrideForStore = await _settingService.SettingExistsAsync(shippingSettings, x => x.DisplayShipmentEventsToStoreOwner, storeId);
             model.HideShippingTotal_OverrideForStore = await _settingService.SettingExistsAsync(shippingSettings, x => x.HideShippingTotal, storeId);
             model.BypassShippingMethodSelectionIfOnlyOne_OverrideForStore = await _settingService.SettingExistsAsync(shippingSettings, x => x.BypassShippingMethodSelectionIfOnlyOne, storeId);
+            model.AllowCustomerToChooseDeliveryDate_OverrideForStore = await _settingService.SettingExistsAsync(shippingSettings, x => x.AllowCustomerToChooseDeliveryDate, storeId);
+            model.DeliveryDateRangeDays_OverrideForStore = await _settingService.SettingExistsAsync(shippingSettings, x => x.DeliveryDateRangeDays, storeId);
             model.ConsiderAssociatedProductsDimensions_OverrideForStore = await _settingService.SettingExistsAsync(shippingSettings, x => x.ConsiderAssociatedProductsDimensions, storeId);
             model.ShippingOriginAddress_OverrideForStore = await _settingService.SettingExistsAsync(shippingSettings, x => x.ShippingOriginAddressId, storeId);
             model.ShippingSorting_OverrideForStore = await _settingService.SettingExistsAsync(shippingSettings, x => x.ShippingSorting, storeId);

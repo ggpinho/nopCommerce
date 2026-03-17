@@ -404,7 +404,7 @@ public class LocalizationMigration : MigrationBase
 
             "Profile.LatestPosts",
             "Profile.LatestPosts.NoPosts",
-            "Profile.PersonalInfo",
+            "Profile.PersonalInfo",            
         });
 
         #endregion
@@ -419,6 +419,11 @@ public class LocalizationMigration : MigrationBase
             ["Admin.Configuration.Settings.Forums.ShowAlertForPM.Hint"] = "Admin.Configuration.Settings.CustomerUser.ShowAlertForPM.Hint",
             ["Admin.Configuration.Settings.Forums.NotifyAboutPrivateMessages"] = "Admin.Configuration.Settings.CustomerUser.NotifyAboutPrivateMessages",
             ["Admin.Configuration.Settings.Forums.NotifyAboutPrivateMessages.Hint"] = "Admin.Configuration.Settings.CustomerUser.NotifyAboutPrivateMessages.Hint",
+
+            //#8097
+            ["Admin.Configuration.Settings.GeneralCommon.TwitterLink"] = "Admin.Configuration.Settings.GeneralCommon.XLink",
+            ["Admin.Configuration.Settings.GeneralCommon.TwitterLink.Hint"] = "Admin.Configuration.Settings.GeneralCommon.XLink.Hint",
+            ["Footer.FollowUs.Twitter"] = "Footer.FollowUs.X",
         });
 
         #endregion
@@ -447,6 +452,31 @@ public class LocalizationMigration : MigrationBase
             ["Admin.ContentManagement.MessageTemplates.Description.Customer.NewPM"] = "This message template is used when the customer gets a notification about a new private message being received. You can set up this option by ticking the checkbox <strong>Show alert for PM</strong> in Configuration - Settings - Customer settings.",
             ["Admin.Configuration.Settings.CustomerUser.BlockTitle.PrivateMessage"] = "Private messages",
 
+            //#8125
+            ["Admin.Configuration.Settings.Catalog.ShowCategoryProductNumber"] = "Show the number of products next to each category",
+            ["Admin.Configuration.Settings.Catalog.ShowCategoryProductNumber.Hint"] = "Check to show the number of products next to each category (category navigation block).",
+            ["Admin.Configuration.Settings.Catalog.ShowCategoryProductNumberIncludingSubcategories"] = "Include subcategories (number of products)",
+            ["Admin.Configuration.Settings.Catalog.ShowCategoryProductNumberIncludingSubcategories.Hint"] = "Check to include subcategories when showing the number of products next to each category.",
+
+            //#7386
+            ["Admin.Configuration.Settings.Shipping.AllowCustomerToChooseDeliveryDate"] = "Allow customers to choose delivery date",
+            ["Admin.Configuration.Settings.Shipping.AllowCustomerToChooseDeliveryDate.Hint"] = "Enables customers to select their preferred delivery date during checkout. This option is available only when the selected shipping method has a defined TransitDays value.",
+            ["Admin.Configuration.Settings.Shipping.DeliveryDateRangeDays"] = "Range of days to choose from",
+            ["Admin.Configuration.Settings.Shipping.DeliveryDateRangeDays.Hint"] = "Specifies how many delivery date options will be available to customers, starting from the earliest possible delivery date calculated using TransitDays.",
+            ["Checkout.SelectDesiredDeliveryDate"] = "Select desired delivery date",
+            ["Admin.Orders.Fields.DesiredDeliveryDate"] = "Desired delivery date",
+            ["Admin.Orders.Fields.DesiredDeliveryDate.Hint"] = "The delivery date selected by the customer during checkout.",
+            ["Order.Shipping.DesiredDeliveryDate"] = "Desired delivery date",
+
+            //#8097
+            ["Admin.Configuration.Settings.GeneralCommon.XLink"] = "X page URL",
+            ["Admin.Configuration.Settings.GeneralCommon.XLink.Hint"] = "Specify your X page URL. Leave empty if you have no such page.",
+            ["Footer.FollowUs.X"] = "X",
+
+            //#8073
+            ["Admin.System.SystemInfo.NopLatestVersion"] = "Latest nopCommerce version",
+            ["Admin.System.SystemInfo.NopLatestVersion.Hint"] = "The latest nopCommerce version, available for download.",
+            ["Admin.System.SystemInfo.NopLatestVersion.Text"] = "<a href='{1}' target='_blank'>{0}</a> (see the <a href='{2}' target='_blank'>release-notes</a>)",
         });
 
         #endregion
