@@ -31,6 +31,8 @@ using Nop.Services.Shipping;
 using Nop.Services.Stores;
 using Nop.Services.Tax;
 using Nop.Services.Vendors;
+using Nop.Core.Infrastructure;
+using OpenTelemetry.Trace;
 
 namespace Nop.Services.Orders;
 
@@ -1566,6 +1568,10 @@ public partial class OrderProcessingService : IOrderProcessingService
     /// </returns>
     public virtual async Task<PlaceOrderResult> PlaceOrderAsync(ProcessPaymentRequest processPaymentRequest)
     {
+        // 1. Iniciar o Span de Tracing (Mede o processo completo, incluindo locks)
+        using var activity = NopTelemetry.ActivitySource.StartActivity("OrderFlow.PlaceOrderProcess");
+        activity?.SetTag("customer.id", processPaymentRequest.CustomerId);
+
         ArgumentNullException.ThrowIfNull(processPaymentRequest);
 
         if (processPaymentRequest.OrderGuid == Guid.Empty)
@@ -1586,6 +1592,11 @@ public partial class OrderProcessingService : IOrderProcessingService
 
                 if (processPaymentResult.Success)
                 {
+                    // Só contamos o valor no Prometheus se o pagamento for bem sucedido
+                    NopTelemetry.OrderValueCounter.Add((double)placeOrderContainer.OrderTotal);
+                    activity?.SetTag("order.total", placeOrderContainer.OrderTotal);
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Ok);
+
                     var order = await SaveOrderDetailsAsync(processPaymentRequest, processPaymentResult,
                         placeOrderContainer);
                     result.PlacedOrder = order;
@@ -1624,6 +1635,8 @@ public partial class OrderProcessingService : IOrderProcessingService
                 }
                 else
                 {
+                    // Marcar erro no Trace
+                    activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, "Payment failed");
                     foreach (var paymentError in processPaymentResult.Errors)
                     {
                         result.AddError(string.Format(
@@ -1633,6 +1646,7 @@ public partial class OrderProcessingService : IOrderProcessingService
             }
             catch (Exception exc)
             {
+                activity?.RecordException(exc);
                 await _logger.ErrorAsync(exc.Message, exc);
                 result.AddError(exc.Message);
             }

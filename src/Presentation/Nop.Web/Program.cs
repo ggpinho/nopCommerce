@@ -5,6 +5,7 @@
     using OpenTelemetry;
     using OpenTelemetry.Trace;
     using OpenTelemetry.Metrics;
+    using OpenTelemetry.Resources;
 
     namespace Nop.Web;
 
@@ -39,37 +40,40 @@
                 });
             }
 
-            // -------------------------------
-            // OpenTelemetry configuration
-            // -------------------------------
-            builder.Services.AddOpenTelemetry()
-                .WithTracing(tracerProviderBuilder =>
-                {
-                    tracerProviderBuilder
-                        .AddAspNetCoreInstrumentation()
-                        .AddHttpClientInstrumentation()
-                        .AddOtlpExporter(options =>
-                        {
-                            options.Endpoint = new Uri("http://localhost:4317");
-                        });
-                })
-                .WithMetrics(metricsProviderBuilder =>
-                {
-                    metricsProviderBuilder
-                        .AddAspNetCoreInstrumentation()
-                        .AddRuntimeInstrumentation()
-                        .AddOtlpExporter(options =>
-                        {
-                            options.Endpoint = new Uri("http://localhost:4317");
-                        });
-                });
+        // -------------------------------
+        // OpenTelemetry configuration
+        // -------------------------------
 
-            //add services to the application and configure service provider
+        builder.Services.AddOpenTelemetry()
+            .ConfigureResource(resource => resource.AddService("NopCommerce-Web"))
+            .WithTracing(tracing =>
+            {
+                tracing
+                    .AddAspNetCoreInstrumentation()
+                    .AddHttpClientInstrumentation()
+                    .AddSqlClientInstrumentation()
+                    .AddSource(NopTelemetry.ActivitySource.Name) 
+                    .AddOtlpExporter(options =>
+                    {
+                        options.Endpoint = new Uri("http://localhost:4317");
+                    });
+            })
+            .WithMetrics(metricsProviderBuilder =>
+            {
+                metricsProviderBuilder
+                    .AddAspNetCoreInstrumentation()
+                    .AddRuntimeInstrumentation()
+                    .AddMeter(NopTelemetry.Meter.Name) 
+                    .AddOtlpExporter(options =>
+                    {
+                        options.Endpoint = new Uri("http://localhost:4317");
+                    });
+            });
+
             builder.Services.ConfigureApplicationServices(builder);
 
             var app = builder.Build();
 
-            //configure the application HTTP request pipeline
             app.ConfigureRequestPipeline();
             await app.PublishAppStartedEventAsync();
 
