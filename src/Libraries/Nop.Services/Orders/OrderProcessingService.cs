@@ -1568,8 +1568,11 @@ public partial class OrderProcessingService : IOrderProcessingService
     /// </returns>
     public virtual async Task<PlaceOrderResult> PlaceOrderAsync(ProcessPaymentRequest processPaymentRequest)
     {
-        // 1. Iniciar o Span de Tracing (Mede o processo completo, incluindo locks)
+        // 1. Iniciar o Span de Tracing (Mede o processo completo)
         using var activity = NopTelemetry.ActivitySource.StartActivity("OrderFlow.PlaceOrderProcess");
+
+        // Apenas IDs são permitidos.
+        // Rasto no Jaeger permanece anónimo.
         activity?.SetTag("customer.id", processPaymentRequest.CustomerId);
 
         ArgumentNullException.ThrowIfNull(processPaymentRequest);
@@ -1586,19 +1589,17 @@ public partial class OrderProcessingService : IOrderProcessingService
 
             try
             {
-                var processPaymentResult =
-                    await GetProcessPaymentResultAsync(processPaymentRequest, placeOrderContainer)
+                var processPaymentResult = await GetProcessPaymentResultAsync(processPaymentRequest, placeOrderContainer)
                     ?? throw new NopException("processPaymentResult is not available");
 
                 if (processPaymentResult.Success)
                 {
-                    // Só contamos o valor no Prometheus se o pagamento for bem sucedido
+                    // Valor da ordem é estatístico, não identifica a pessoa.
                     NopTelemetry.OrderValueCounter.Add((double)placeOrderContainer.OrderTotal);
                     activity?.SetTag("order.total", placeOrderContainer.OrderTotal);
                     activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Ok);
 
-                    var order = await SaveOrderDetailsAsync(processPaymentRequest, processPaymentResult,
-                        placeOrderContainer);
+                    var order = await SaveOrderDetailsAsync(processPaymentRequest, processPaymentResult, placeOrderContainer);
                     result.PlacedOrder = order;
 
                     //move shopping cart items to order items
@@ -1620,6 +1621,7 @@ public partial class OrderProcessingService : IOrderProcessingService
                     //reset checkout data
                     await _customerService.ResetCheckoutDataAsync(placeOrderContainer.Customer,
                         processPaymentRequest.StoreId, clearCouponCodes: true, clearCheckoutAttributes: true);
+
                     await _customerActivityService.InsertActivityAsync("PublicStore.PlaceOrder",
                         string.Format(await _localizationService.GetResourceAsync("ActivityLog.PublicStore.PlaceOrder"),
                             order.Id), order);
@@ -1635,7 +1637,7 @@ public partial class OrderProcessingService : IOrderProcessingService
                 }
                 else
                 {
-                    // Marcar erro no Trace
+                    // Reporta a falha sem expor dados sensíveis do cartão ou cliente
                     activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, "Payment failed");
                     foreach (var paymentError in processPaymentResult.Errors)
                     {
@@ -1646,6 +1648,7 @@ public partial class OrderProcessingService : IOrderProcessingService
             }
             catch (Exception exc)
             {
+                // RecordException guarda a StackTrace técnica para debug.
                 activity?.RecordException(exc);
                 await _logger.ErrorAsync(exc.Message, exc);
                 result.AddError(exc.Message);

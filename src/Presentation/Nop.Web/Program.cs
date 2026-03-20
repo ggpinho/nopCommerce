@@ -51,8 +51,13 @@
                 tracing
                     .AddAspNetCoreInstrumentation()
                     .AddHttpClientInstrumentation()
-                    .AddSqlClientInstrumentation()
-                    .AddSource(NopTelemetry.ActivitySource.Name) 
+                    .AddSqlClientInstrumentation(options => 
+                    {
+                        // desativado (false por padrão).
+                        // Evita que o OpenTelemetry capture o comando SQL completo, 
+                        options.SetDbStatementForText = false; 
+                    })
+                    .AddSource(NopTelemetry.ActivitySource.Name)
                     .AddOtlpExporter(options =>
                     {
                         options.Endpoint = new Uri("http://localhost:4317");
