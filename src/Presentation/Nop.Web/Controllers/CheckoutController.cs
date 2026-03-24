@@ -9,6 +9,7 @@ using Nop.Core.Domain.Security;
 using Nop.Core.Domain.Shipping;
 using Nop.Core.Domain.Tax;
 using Nop.Core.Http;
+using Nop.Core.Infrastructure;
 using Nop.Services.Attributes;
 using Nop.Services.Catalog;
 using Nop.Services.Common;
@@ -25,6 +26,7 @@ using Nop.Web.Framework.Controllers;
 using Nop.Web.Framework.Mvc.Filters;
 using Nop.Web.Models.Checkout;
 using Nop.Web.Models.Common;
+using System.Diagnostics;
 using ILogger = Nop.Services.Logging.ILogger;
 
 namespace Nop.Web.Controllers;
@@ -263,6 +265,61 @@ public partial class CheckoutController : BasePublicController
         }
 
         return string.Empty;
+    }
+
+    protected virtual string ClassifyPaymentError(string errorMessage)
+    {
+        if (string.IsNullOrWhiteSpace(errorMessage))
+            return "payment_rejected";
+
+        var normalized = errorMessage.ToLowerInvariant();
+
+        if (normalized.Contains("expired"))
+            return "card_expired";
+
+        if (normalized.Contains("cvv") || normalized.Contains("card code") || normalized.Contains("security code"))
+            return "cvv_invalid";
+
+        if (normalized.Contains("invalid") && normalized.Contains("card"))
+            return "card_invalid";
+
+        if (normalized.Contains("insufficient") || normalized.Contains("funds"))
+            return "insufficient_funds";
+
+        if (normalized.Contains("timeout") || normalized.Contains("timed out"))
+            return "gateway_timeout";
+
+        if (normalized.Contains("declined") || normalized.Contains("rejected"))
+            return "card_declined";
+
+        return "payment_rejected";
+    }
+
+    protected virtual string GetPrimaryPaymentErrorType(IEnumerable<string> warnings)
+    {
+        var warningList = warnings?.ToList() ?? [];
+        if (!warningList.Any())
+            return "payment_rejected";
+
+        var priority = new[]
+        {
+            "gateway_timeout",
+            "card_expired",
+            "cvv_invalid",
+            "card_invalid",
+            "insufficient_funds",
+            "card_declined",
+            "payment_rejected"
+        };
+
+        var classified = warningList.Select(ClassifyPaymentError).ToList();
+        foreach (var item in priority)
+        {
+            if (classified.Contains(item))
+                return item;
+        }
+
+        return "payment_rejected";
     }
 
     protected virtual async Task<JsonResult> EditAddressAsync(AddressModel addressModel, IFormCollection form, Func<Customer, IList<ShoppingCartItem>, Address, Task<JsonResult>> getResult)
@@ -1518,6 +1575,7 @@ public partial class CheckoutController : BasePublicController
     [HttpPost]
     public virtual async Task<IActionResult> OpcSaveBilling(CheckoutBillingAddressModel model, IFormCollection form)
     {
+        var duration = Stopwatch.StartNew();
         try
         {
             //validation
@@ -1667,6 +1725,11 @@ public partial class CheckoutController : BasePublicController
             await _logger.WarningAsync(exc.Message, exc, await _workContext.GetCurrentCustomerAsync());
             return Json(new { error = 1, message = exc.Message });
         }
+        finally
+        {
+            duration.Stop();
+            NopTelemetry.CheckoutStepDuration.Record(duration.Elapsed.TotalMilliseconds, new KeyValuePair<string, object>("step", "billing_validation"));
+        }
     }
 
     [HttpPost]
@@ -1791,6 +1854,7 @@ public partial class CheckoutController : BasePublicController
     [HttpPost]
     public virtual async Task<IActionResult> OpcSaveShippingMethod(string shippingoption, IFormCollection form)
     {
+        var duration = Stopwatch.StartNew();
         try
         {
             //validation
@@ -1874,11 +1938,17 @@ public partial class CheckoutController : BasePublicController
             await _logger.WarningAsync(exc.Message, exc, await _workContext.GetCurrentCustomerAsync());
             return Json(new { error = 1, message = exc.Message });
         }
+        finally
+        {
+            duration.Stop();
+            NopTelemetry.CheckoutStepDuration.Record(duration.Elapsed.TotalMilliseconds, new KeyValuePair<string, object>("step", "shipping_calculation"));
+        }
     }
 
     [HttpPost]
     public virtual async Task<IActionResult> OpcSavePaymentMethod(string paymentmethod, CheckoutPaymentMethodModel model)
     {
+        var duration = Stopwatch.StartNew();
         try
         {
             //validation
@@ -1900,7 +1970,10 @@ public partial class CheckoutController : BasePublicController
 
             //payment method 
             if (string.IsNullOrEmpty(paymentmethod))
+            {
+                NopTelemetry.OrderFailureCounter.Add(1, new KeyValuePair<string, object>("error.type", "invalid_payment_method"));
                 throw new Exception("Selected payment method can't be parsed");
+            }
 
             //reward points
             if (_rewardPointsSettings.Enabled)
@@ -1933,7 +2006,10 @@ public partial class CheckoutController : BasePublicController
             var paymentMethodInst = await _paymentPluginManager
                 .LoadPluginBySystemNameAsync(paymentmethod, customer, store.Id);
             if (!_paymentPluginManager.IsPluginActive(paymentMethodInst))
+            {
+                NopTelemetry.OrderFailureCounter.Add(1, new KeyValuePair<string, object>("error.type", "invalid_payment_method"));
                 throw new Exception("Selected payment method can't be parsed");
+            }
 
             //save
             await _genericAttributeService.SaveAttributeAsync(customer,
@@ -1946,12 +2022,18 @@ public partial class CheckoutController : BasePublicController
             await _logger.WarningAsync(exc.Message, exc, await _workContext.GetCurrentCustomerAsync());
             return Json(new { error = 1, message = exc.Message });
         }
+        finally
+        {
+            duration.Stop();
+            NopTelemetry.CheckoutStepDuration.Record(duration.Elapsed.TotalMilliseconds, new KeyValuePair<string, object>("step", "payment_method_loading"));
+        }
     }
 
     [HttpPost]
     [IgnoreAntiforgeryToken]
     public virtual async Task<IActionResult> OpcSavePaymentInfo(IFormCollection form)
     {
+        var duration = Stopwatch.StartNew();
         try
         {
             //validation
@@ -1996,6 +2078,9 @@ public partial class CheckoutController : BasePublicController
                 });
             }
 
+            var errorType = GetPrimaryPaymentErrorType(warnings);
+            NopTelemetry.OrderFailureCounter.Add(1, new KeyValuePair<string, object>("error.type", errorType));
+
             //If we got this far, something failed, redisplay form
             var paymentInfoModel = await _checkoutModelFactory.PreparePaymentInfoModelAsync(paymentMethod);
             return Json(new
@@ -2011,6 +2096,11 @@ public partial class CheckoutController : BasePublicController
         {
             await _logger.WarningAsync(exc.Message, exc, await _workContext.GetCurrentCustomerAsync());
             return Json(new { error = 1, message = exc.Message });
+        }
+        finally
+        {
+            duration.Stop();
+            NopTelemetry.CheckoutStepDuration.Record(duration.Elapsed.TotalMilliseconds, new KeyValuePair<string, object>("step", "payment_info_validation"));
         }
     }
 

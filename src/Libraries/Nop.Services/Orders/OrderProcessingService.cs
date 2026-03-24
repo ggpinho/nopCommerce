@@ -33,6 +33,8 @@ using Nop.Services.Tax;
 using Nop.Services.Vendors;
 using Nop.Core.Infrastructure;
 using OpenTelemetry.Trace;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 
 namespace Nop.Services.Orders;
 
@@ -484,46 +486,57 @@ public partial class OrderProcessingService : IOrderProcessingService
     /// <exception cref="NopException">Validation problems</exception>
     protected virtual async Task PrepareAndValidateShoppingCartAndCheckoutAttributesAsync(PlaceOrderContainer details, ProcessPaymentRequest processPaymentRequest, Currency currentCurrency)
     {
-        //checkout attributes
-        details.CheckoutAttributesXml = await _genericAttributeService.GetAttributeAsync<string>(details.Customer, NopCustomerDefaults.CheckoutAttributes, processPaymentRequest.StoreId);
-        details.CheckoutAttributeDescription = await _checkoutAttributeFormatter.FormatAttributesAsync(details.CheckoutAttributesXml, details.Customer);
+        // Start timing stock validation to feed histogram
+        var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        //load shopping cart
-        details.Cart = await _shoppingCartService.GetShoppingCartAsync(details.Customer, ShoppingCartType.ShoppingCart, processPaymentRequest.StoreId);
-
-        if (!details.Cart.Any())
-            throw new NopException("Cart is empty");
-
-        //validate the entire shopping cart
-        var warnings = await _shoppingCartService.GetShoppingCartWarningsAsync(details.Cart, details.CheckoutAttributesXml, true);
-        if (warnings.Any())
-            throw new NopException(warnings.Aggregate(string.Empty, (current, next) => $"{current}{next};"));
-
-        //validate individual cart items
-        foreach (var sci in details.Cart)
+        try
         {
-            var product = await _productService.GetProductByIdAsync(sci.ProductId);
+            //checkout attributes
+            details.CheckoutAttributesXml = await _genericAttributeService.GetAttributeAsync<string>(details.Customer, NopCustomerDefaults.CheckoutAttributes, processPaymentRequest.StoreId);
+            details.CheckoutAttributeDescription = await _checkoutAttributeFormatter.FormatAttributesAsync(details.CheckoutAttributesXml, details.Customer);
 
-            var sciWarnings = await _shoppingCartService.GetShoppingCartItemWarningsAsync(details.Customer,
-                sci.ShoppingCartType, product, processPaymentRequest.StoreId, sci.AttributesXml,
-                sci.CustomerEnteredPrice, sci.RentalStartDateUtc, sci.RentalEndDateUtc, sci.Quantity, false, sci.Id);
-            if (sciWarnings.Any())
-                throw new NopException(sciWarnings.Aggregate(string.Empty, (current, next) => $"{current}{next};"));
+            //load shopping cart
+            details.Cart = await _shoppingCartService.GetShoppingCartAsync(details.Customer, ShoppingCartType.ShoppingCart, processPaymentRequest.StoreId);
+
+            if (!details.Cart.Any())
+                throw new NopException("Cart is empty");
+
+            //validate the entire shopping cart
+            var warnings = await _shoppingCartService.GetShoppingCartWarningsAsync(details.Cart, details.CheckoutAttributesXml, true);
+            if (warnings.Any())
+                throw new NopException(warnings.Aggregate(string.Empty, (current, next) => $"{current}{next};"));
+
+            //validate individual cart items
+            foreach (var sci in details.Cart)
+            {
+                var product = await _productService.GetProductByIdAsync(sci.ProductId);
+
+                var sciWarnings = await _shoppingCartService.GetShoppingCartItemWarningsAsync(details.Customer,
+                    sci.ShoppingCartType, product, processPaymentRequest.StoreId, sci.AttributesXml,
+                    sci.CustomerEnteredPrice, sci.RentalStartDateUtc, sci.RentalEndDateUtc, sci.Quantity, false, sci.Id);
+                if (sciWarnings.Any())
+                    throw new NopException(sciWarnings.Aggregate(string.Empty, (current, next) => $"{current}{next};"));
+            }
+
+            //min totals validation
+            if (!await ValidateMinOrderSubtotalAmountAsync(details.Cart))
+            {
+                var minOrderSubtotalAmount = await _currencyService.ConvertFromPrimaryStoreCurrencyAsync(_orderSettings.MinOrderSubtotalAmount, currentCurrency);
+                throw new NopException(string.Format(await _localizationService.GetResourceAsync("Checkout.MinOrderSubtotalAmount"),
+                    await _priceFormatter.FormatPriceAsync(minOrderSubtotalAmount, true, false)));
+            }
+
+            if (!await ValidateMinOrderTotalAmountAsync(details.Cart))
+            {
+                var minOrderTotalAmount = await _currencyService.ConvertFromPrimaryStoreCurrencyAsync(_orderSettings.MinOrderTotalAmount, currentCurrency);
+                throw new NopException(string.Format(await _localizationService.GetResourceAsync("Checkout.MinOrderTotalAmount"),
+                    await _priceFormatter.FormatPriceAsync(minOrderTotalAmount, true, false)));
+            }
         }
-
-        //min totals validation
-        if (!await ValidateMinOrderSubtotalAmountAsync(details.Cart))
+        finally
         {
-            var minOrderSubtotalAmount = await _currencyService.ConvertFromPrimaryStoreCurrencyAsync(_orderSettings.MinOrderSubtotalAmount, currentCurrency);
-            throw new NopException(string.Format(await _localizationService.GetResourceAsync("Checkout.MinOrderSubtotalAmount"),
-                await _priceFormatter.FormatPriceAsync(minOrderSubtotalAmount, true, false)));
-        }
-
-        if (!await ValidateMinOrderTotalAmountAsync(details.Cart))
-        {
-            var minOrderTotalAmount = await _currencyService.ConvertFromPrimaryStoreCurrencyAsync(_orderSettings.MinOrderTotalAmount, currentCurrency);
-            throw new NopException(string.Format(await _localizationService.GetResourceAsync("Checkout.MinOrderTotalAmount"),
-                await _priceFormatter.FormatPriceAsync(minOrderTotalAmount, true, false)));
+            sw.Stop();
+            NopTelemetry.StockValidationDuration.Record(sw.Elapsed.TotalMilliseconds);
         }
     }
 
@@ -1558,6 +1571,61 @@ public partial class OrderProcessingService : IOrderProcessingService
         await CheckAndSaveOrderStatusAsync(order, false);
     }
 
+    protected virtual string ClassifyPaymentError(string errorMessage)
+    {
+        if (string.IsNullOrWhiteSpace(errorMessage))
+            return "payment_rejected";
+
+        var normalized = errorMessage.ToLowerInvariant();
+
+        if (normalized.Contains("expired"))
+            return "card_expired";
+
+        if (normalized.Contains("cvv") || normalized.Contains("card code") || normalized.Contains("security code"))
+            return "cvv_invalid";
+
+        if (normalized.Contains("invalid") && normalized.Contains("card"))
+            return "card_invalid";
+
+        if (normalized.Contains("insufficient") || normalized.Contains("funds"))
+            return "insufficient_funds";
+
+        if (normalized.Contains("timeout") || normalized.Contains("timed out"))
+            return "gateway_timeout";
+
+        if (normalized.Contains("declined") || normalized.Contains("rejected"))
+            return "card_declined";
+
+        return "payment_rejected";
+    }
+
+    protected virtual string GetPrimaryPaymentErrorType(IEnumerable<string> errors)
+    {
+        var errorList = errors?.Where(e => !string.IsNullOrWhiteSpace(e)).ToList() ?? [];
+        if (!errorList.Any())
+            return "payment_rejected";
+
+        var priority = new[]
+        {
+            "gateway_timeout",
+            "card_expired",
+            "cvv_invalid",
+            "card_invalid",
+            "insufficient_funds",
+            "card_declined",
+            "payment_rejected"
+        };
+
+        var classified = errorList.Select(ClassifyPaymentError).ToList();
+        foreach (var item in priority)
+        {
+            if (classified.Contains(item))
+                return item;
+        }
+
+        return "payment_rejected";
+    }
+
     /// <summary>
     /// Places an order
     /// </summary>
@@ -1589,34 +1657,61 @@ public partial class OrderProcessingService : IOrderProcessingService
 
             try
             {
-                var processPaymentResult = await GetProcessPaymentResultAsync(processPaymentRequest, placeOrderContainer)
-                    ?? throw new NopException("processPaymentResult is not available");
+                ProcessPaymentResult processPaymentResult;
+                using (var paymentSpan = NopTelemetry.ActivitySource.StartActivity("OrderFlow.PaymentGatewayStep"))
+                {
+                    var paymentGatewayDuration = Stopwatch.StartNew();
+                    paymentSpan?.SetTag("payment.method", processPaymentRequest.PaymentMethodSystemName);
+                    try
+                    {
+                        processPaymentResult = await GetProcessPaymentResultAsync(processPaymentRequest, placeOrderContainer)
+                            ?? throw new NopException("processPaymentResult is not available");
+                    }
+                    finally
+                    {
+                        paymentGatewayDuration.Stop();
+                        NopTelemetry.PaymentGatewayDuration.Record(paymentGatewayDuration.Elapsed.TotalMilliseconds,
+                            new TagList
+                            {
+                                { "payment.method", processPaymentRequest.PaymentMethodSystemName ?? "unknown" }
+                            });
+                    }
+                }
 
                 if (processPaymentResult.Success)
                 {
                     // Valor da ordem é estatístico, não identifica a pessoa.
                     NopTelemetry.OrderValueCounter.Add((double)placeOrderContainer.OrderTotal);
+                    NopTelemetry.OrderCounter.Add(1, new TagList 
+                    { 
+                        { "status", "success" }, 
+                        { "payment.method", processPaymentRequest.PaymentMethodSystemName } 
+                    });
                     activity?.SetTag("order.total", placeOrderContainer.OrderTotal);
                     activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Ok);
 
-                    var order = await SaveOrderDetailsAsync(processPaymentRequest, processPaymentResult, placeOrderContainer);
-                    result.PlacedOrder = order;
+                    Order order;
+                    using (var dbSpan = NopTelemetry.ActivitySource.StartActivity("OrderFlow.SaveDatabaseStep"))
+                    {
+                        order = await SaveOrderDetailsAsync(processPaymentRequest, processPaymentResult, placeOrderContainer);
+                        result.PlacedOrder = order;
 
-                    //move shopping cart items to order items
-                    await MoveShoppingCartItemsToOrderItemsAsync(placeOrderContainer, order);
+                        //move shopping cart items to order items
+                        await MoveShoppingCartItemsToOrderItemsAsync(placeOrderContainer, order);
 
-                    //discount usage history
-                    await SaveDiscountUsageHistoryAsync(placeOrderContainer, order);
+                        //discount usage history
+                        await SaveDiscountUsageHistoryAsync(placeOrderContainer, order);
 
-                    //gift card usage history
-                    await SaveGiftCardUsageHistoryAsync(placeOrderContainer, order);
+                        //gift card usage history
+                        await SaveGiftCardUsageHistoryAsync(placeOrderContainer, order);
+                    }
 
                     //recurring orders
                     if (placeOrderContainer.IsRecurringShoppingCart)
-                        await CreateFirstRecurringPaymentAsync(processPaymentRequest, order);
+                        await CreateFirstRecurringPaymentAsync(processPaymentRequest, result.PlacedOrder);
 
                     //notifications
-                    await SendNotificationsAndSaveNotesAsync(order);
+                    await SendNotificationsAndSaveNotesAsync(result.PlacedOrder);
 
                     //reset checkout data
                     await _customerService.ResetCheckoutDataAsync(placeOrderContainer.Customer,
@@ -1624,21 +1719,23 @@ public partial class OrderProcessingService : IOrderProcessingService
 
                     await _customerActivityService.InsertActivityAsync("PublicStore.PlaceOrder",
                         string.Format(await _localizationService.GetResourceAsync("ActivityLog.PublicStore.PlaceOrder"),
-                            order.Id), order);
+                            result.PlacedOrder.Id), result.PlacedOrder);
 
                     //raise event       
-                    await _eventPublisher.PublishAsync(new OrderPlacedEvent(order));
+                    await _eventPublisher.PublishAsync(new OrderPlacedEvent(result.PlacedOrder));
 
                     //check order status
-                    await CheckOrderStatusAsync(order);
+                    await CheckOrderStatusAsync(result.PlacedOrder);
 
-                    if (order.PaymentStatus == PaymentStatus.Paid)
-                        await ProcessOrderPaidAsync(order);
+                    if (result.PlacedOrder.PaymentStatus == PaymentStatus.Paid)
+                        await ProcessOrderPaidAsync(result.PlacedOrder);
                 }
                 else
                 {
                     // Reporta a falha sem expor dados sensíveis do cartão ou cliente
                     activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, "Payment failed");
+                    var errorType = GetPrimaryPaymentErrorType(processPaymentResult.Errors);
+                    NopTelemetry.OrderFailureCounter.Add(1, new TagList { { "error.type", errorType } });
                     foreach (var paymentError in processPaymentResult.Errors)
                     {
                         result.AddError(string.Format(
@@ -1649,7 +1746,7 @@ public partial class OrderProcessingService : IOrderProcessingService
             catch (Exception exc)
             {
                 // RecordException guarda a StackTrace técnica para debug.
-                activity?.RecordException(exc);
+                activity?.AddException(exc);
                 await _logger.ErrorAsync(exc.Message, exc);
                 result.AddError(exc.Message);
             }
